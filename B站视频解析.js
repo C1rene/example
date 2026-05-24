@@ -87,19 +87,29 @@ export class bilitv extends plugin {
                 return true
             }
         }
+
         if(e.msg.includes("点赞" && "投币")){ return true }
         if(e.msg.match(regB23)){
             try{
-                bvid = regBV.exec((await fetch("https://"+(regB23.exec(e.msg)[0]).replace(/\\/g,""))).url)
-                if(bvid == null){
-                    e.reply("解析失败",true)
-                    return true
+                let shortLinkPart = regB23.exec(e.msg)[0].replace(/\\/g,"")
+                let response = await fetch("https://" + shortLinkPart, { redirect: 'follow' })
+                let realUrl = response.url
+                let bvMatch = regBV.exec(realUrl)
+
+                if(bvMatch){
+                    bvid = bvMatch[0]
+                } else {
+                    let newE = Object.assign({}, e)
+                    newE.msg = realUrl
+                    
+                    return await this.jxfj(newE)
                 }
-            }catch(e){
-                e.reply("解析失败",true)
-                return true
+            } catch(err) {
+                console.error("B23解析错误:", err)
+                return await this.jxfj(e)
             }
         }
+
         if(e.msg.match(regBV)){
             bvid = regBV.exec(e.msg)
         }
