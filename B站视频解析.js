@@ -101,7 +101,6 @@ export class bilitv extends plugin {
                 } else {
                     let newE = Object.assign({}, e)
                     newE.msg = realUrl
-                    
                     return await this.jxfj(newE)
                 }
             } catch(err) {
