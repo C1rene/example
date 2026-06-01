@@ -120,7 +120,8 @@ export class bilitv extends plugin {
         })
         res = await res.json()
         if(res.code != 0){
-            return e.reply(bvid + "解析失败\n信息:" + res.message)
+            //return e.reply(bvid + "解析失败\n信息:" + res.message)
+            return true
         }else{
             e.reply([segment.image(res.data.pic),`${res.data.title}\nhttps://www.bilibili.com/video/${bvid}\n作者: ${res.data.owner.name}\n播放: ${formatNumber(res.data.stat.view)} | 弹幕: ${formatNumber(res.data.stat.danmaku)}\n点赞: ${formatNumber(res.data.stat.like)} | 评论: ${formatNumber(res.data.stat.reply)}\n投币: ${formatNumber(res.data.stat.coin)} | 分享: ${formatNumber(res.data.stat.share)}\n收藏: ${formatNumber(res.data.stat.favorite)} | 时长: ${formatDurationDesc(res.data.duration)}\n\n简介: ${res.data.desc}`],true)
         }
@@ -132,7 +133,7 @@ export class bilitv extends plugin {
         })
         res = await res.json()
         if(!res || res.code != 0){
-            e.reply("视频解析失败")
+            //e.reply("视频解析失败")
             return true
         }
         e.reply(segment.video(Buffer.from(await (await fetch(res.data.durl[0].url,{
@@ -159,11 +160,12 @@ export class bilitv extends plugin {
                         }
                     })).json()
                     if(temp.code != 0){
-                        return e.reply("解析失败\n信息:" + temp.message)
+                        //return e.reply("解析失败\n信息:" + temp.message)
+                        return true
                     }
                     ssid = temp.result.media.season_id
                 }catch(e){
-                    e.reply("解析失败")
+                    //e.reply("解析失败")
                     return true
                 }
             }else{
@@ -176,7 +178,8 @@ export class bilitv extends plugin {
                 }
             })).json()
             if(temp.code != 0){
-                return e.reply("解析失败\n信息:" + temp.message)
+                //return e.reply("解析失败\n信息:" + temp.message)
+                return true;
             }
             epid = (temp.result.main_section.episodes[0].share_url).replace("https://www.bilibili.com/bangumi/play/ep","")
         }else{
@@ -189,7 +192,8 @@ export class bilitv extends plugin {
             }
         })).json()
         if(res.code != 0){
-            return e.reply("解析失败\n信息:" + res.message)
+            //return e.reply("解析失败\n信息:" + res.message)
+            return true;
         }
         e.reply([
             segment.image(res.result.cover),
