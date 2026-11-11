@@ -37,7 +37,7 @@ export class bilitv extends plugin {
             name: "bilitv",
             dsc: "b站解析",
             event: "message",
-            priority: -114514,
+            priority: 114514,
             rule:[
                 {
                     reg: regBV,
