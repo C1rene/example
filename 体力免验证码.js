@@ -5,8 +5,6 @@ import lodash from 'lodash'
 import fs from "fs"
 import YAML from 'yaml'
 import puppeteer from '../../lib/puppeteer/puppeteer.js'
-import Note from '../xiaoyao-cvs-plugin/model/note.js'
-import { render } from '../xiaoyao-cvs-plugin/adapter/render.js'
 
 /*
 * 体力免验证码
@@ -16,16 +14,17 @@ import { render } from '../xiaoyao-cvs-plugin/adapter/render.js'
 /*
 * 与实时便笺api区别
 * 原神：无派遣探索剩余时间、洞天宝钱回复时间、周本和质变仪信息；增加了每日签到状态
-* 星穹铁道：包含实时便笺全部数据；额外增加了每日实训活跃度、模拟宇宙每周积分、每日签到状态
+* 星穹铁道：展示开拓力、每日实训活跃度、模拟宇宙每周积分和每日签到状态
 */
 
-// 原神使用逍遥体力模板 (派遣探索时间、周本、质变仪信息均为虚假信息)
-const xiaoyaoNote = false
 
 const mysSalt = "fdv0fY9My9eA7MR0NpjGP9RjueFvjUSQ" //k2
 const mysSalt2 = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v" //x6
-const DEVICE_ID = randomString(32).toUpperCase()
-const DEVICE_NAME = randomString(lodash.random(1, 10))
+// 每个米游社账号单独复用设备身份，避免所有用户共用同一个进程级 Device ID。
+const DEVICE_CACHE = new Map()
+const DEVICE_NAME = 'Xiaomi 14'
+const DEVICE_MODEL = 'Mi 10'
+const DEFAULT_DEVICE_FP = '38d805c20d53d'
 
 export class dailyNoteByWidget extends plugin {
     constructor(e) {
@@ -60,15 +59,10 @@ export class dailyNoteByWidget extends plugin {
         }
         e.uid = uid
         e.cookie = `stuid=${sk.stuid};stoken=${sk.stoken};mid=${sk.mid};`
+        this.deviceInfo = await this.getDeviceIdentity(sk)
         let headers = this.getHeaders(e.isSr)
         let res = await fetch(e.isSr ? this.srUrl : this.gsUrl, { method: "get", headers }).then(res => res.json())
         if (!res || res.retcode !== 0) return false
-
-        if (!e.isSr && xiaoyaoNote) {
-            let notes = new Note(e)
-            res = this.dealData(res)
-            return await notes.getNote({}, e.uid, res, { render })
-        }
 
         let data = await this.getData(res)
         if (!data) return false
@@ -78,14 +72,19 @@ export class dailyNoteByWidget extends plugin {
     }
 
     async getData(res) {
+        let gameData = {}
+        if (this.e.isSr) {
+            // 使用 Genshin MysApi 的 UserGame（Cookie）流程获取昵称、等级和真实区服。
+            // getUserGameRolesByStoken 在当前接口环境下不稳定，且此前使用的 DS2 也不适用于该绑定接口。
+            const srContext = await this.getSrAccountContext()
+            gameData = srContext?.role || {}
+
+        }
+
         let data = this.e.isSr ? this.noteSr(res) : this.noteData(res)
         let screenData = {
             tplFile: `./resources/html/dailyNoteByWidget${this.e.isSr ? '_SR' : ''}/dailyNoteByWidget.html`,
             pluResPath: `${this._path}/resources/`,
-        }
-        let gameData
-        if (this.e.isSr) {
-            gameData = await this.getGameDate()
         }
         return {
             name: this.e.sender.card,
@@ -202,19 +201,6 @@ export class dailyNoteByWidget extends plugin {
         }
         data.bfStamina = data.current_stamina / data.max_stamina * 100 + '%'
 
-        /** 派遣 */
-        for (let item of data.expeditions) {
-            let d = moment.duration(item.remaining_time, 'seconds')
-            let day = Math.floor(d.asDays())
-            let hours = d.hours()
-            let minutes = d.minutes()
-            item.dateTime = ([day + '天', hours + '时', minutes + '分'].filter(v => !['0天', '0时', '0分'].includes(v))).join('')
-            item.bfTime = (72000 - item.remaining_time) / 72000 * 100 + '%'
-            if (item.avatars.length == 1) {
-                item.avatars.push('派遣头像')
-            }
-        }
-
         // 标识属性图标~
         let icon = lodash.sample(['希儿', '白露', '艾丝妲', '布洛妮娅', '姬子', '卡芙卡', '克拉拉', '停云', '佩拉', '黑塔', '希露瓦', '银狼'])
         let week = [
@@ -239,11 +225,6 @@ export class dailyNoteByWidget extends plugin {
 
     // 赋值兼容图鉴模板
     dealData(res) {
-        if (res.data.expeditions && res.data.expeditions.length >= 1) {
-            for (let i in res.data.expeditions) {
-                res.data.expeditions[i].remained_time = 3600 * 20
-            }
-        }
         res.data.home_coin_recovery_time = (res.data.max_home_coin - res.data.current_home_coin) / 30 * 3600
         res.data.remain_resin_discount_num = 3
         res.data.resin_discount_num_limit = 3
@@ -252,18 +233,119 @@ export class dailyNoteByWidget extends plugin {
         return res
     }
 
-    async getGameDate() {
-        let headers = this.getHeaders()
-        let res = await fetch('https://api-takumi.miyoushe.com/binding/api/getUserGameRolesByStoken', { method: "get", headers }).then(res => res.json())
-        if (res && res.retcode === 0) {
-            let list = res?.data?.list || {}
-            for (let i in list) {
-                if (list[i].game_uid == this.e.uid) {
-                    return list[i]
+    async getSrAccountContext() {
+        try {
+            const sk = this.getStoken(this.e.user_id, this.e.uid)
+            const stuid = String(sk?.stuid || sk?.uid || '')
+            const stoken = String(sk?.stoken || '')
+            const mid = String(sk?.mid || '')
+            if (!stuid || !stoken || !mid) {
+                globalThis.logger?.debug?.(`[体力免验证码] 星铁账号凭据不完整：stuid=${Boolean(stuid)} stoken=${Boolean(stoken)} mid=${Boolean(mid)}`)
+                return { role: {}, api: null }
+            }
+
+            const gameBiz = /^[125]/.test(String(this.e.uid)) ? 'hkrpg_cn' : 'hkrpg_global'
+            const { default: GenshinMysApi } = await import(`file://${this._path}/plugins/genshin/model/mys/mysApi.js`)
+            const stokenCookie = `stuid=${stuid};stoken=${stoken};mid=${mid};`
+            const api = new GenshinMysApi(
+                this.e.uid,
+                stokenCookie,
+                { game: 'sr', device: this.deviceInfo?.deviceId, log: false },
+                '',
+                gameBiz
+            )
+
+            // 与 Genshin MysApi 的 refreshCk 保持一致：从 Stoken 交换 Ltoken(type=2) 与 Cookie Token(type=4)。
+            const [ltokenResult, cookieResult] = await Promise.all([
+                api.getData('exchange', { token: stoken, type: 2, mid, deviceId: this.deviceInfo?.deviceId, deviceFp: this.deviceInfo?.deviceFp }),
+                api.getData('exchange', { token: stoken, type: 4, mid, deviceId: this.deviceInfo?.deviceId, deviceFp: this.deviceInfo?.deviceFp })
+            ])
+            const ltoken = String(ltokenResult?.data?.token?.token || sk?.ltoken || '').trim()
+            const cookieToken = String(cookieResult?.data?.token?.token || cookieResult?.data?.cookie_token || '').trim()
+            if (!cookieToken || !ltoken) {
+                globalThis.logger?.debug?.(`[体力免验证码] 星铁 Stoken exchange 未取得完整 Ltoken/Cookie Token：Ltoken=${Boolean(ltoken)} CookieToken=${Boolean(cookieToken)}；${cookieResult?.message || cookieResult?.retcode || ''}`)
+                return { role: {}, api: null }
+            }
+
+            const ck = `ltoken=${ltoken};ltuid=${stuid};cookie_token=${cookieToken};account_id=${stuid};`
+            api.cookie = ck
+            this.srMysApi = api
+
+            const roleResult = await api.getData('UserGame', {
+                game_biz: gameBiz,
+                deviceId: this.deviceInfo?.deviceId,
+                deviceFp: this.deviceInfo?.deviceFp,
+                headers: {
+                    'x-rpc-device_id': this.deviceInfo?.deviceId,
+                    'x-rpc-device_fp': this.deviceInfo?.deviceFp
+                }
+            })
+            if (Number(roleResult?.retcode) !== 0) {
+                globalThis.logger?.debug?.(`[体力免验证码] 获取星铁角色信息失败：${roleResult?.retcode} ${roleResult?.message || ''}`)
+                return { role: {}, api }
+            }
+
+            const roles = Array.isArray(roleResult?.data?.list) ? roleResult.data.list : []
+            const role = roles.find(item => String(item?.game_uid) === String(this.e.uid))
+            if (!role) {
+                globalThis.logger?.debug?.(`[体力免验证码] 角色列表中未找到星铁 UID ${this.e.uid}，返回角色数：${roles.length}`)
+                return { role: {}, api }
+            }
+
+            return {
+                api,
+                role: {
+                    ...role,
+                    nickname: role.nickname || role.game_role_name || role.name || '',
+                    level: role.level ?? role.game_level ?? role.player_level ?? ''
                 }
             }
+        } catch (error) {
+            globalThis.logger?.debug?.(`[体力免验证码] 获取星铁账号信息异常：${error.message}`)
+            return { role: {}, api: null }
         }
-        return {}
+    }
+
+    async getDeviceIdentity(sk = {}) {
+        const stuid = String(sk.stuid || sk.uid || '')
+        const cacheKey = stuid || String(this.e.user_id || 'default')
+        if (DEVICE_CACHE.has(cacheKey)) return DEVICE_CACHE.get(cacheKey)
+
+        let deviceId = this.e.deviceId || sk.deviceId || sk.device_id || ''
+        let deviceFp = this.e.deviceFp || sk.deviceFp || sk.device_fp || ''
+
+        // 优先复用 Genshin MysUsers 中已持久化的账号设备 ID。
+        if (!deviceId && stuid) {
+            try {
+                const { default: MysUser } = await import(`file://${this._path}/plugins/genshin/model/mys/MysUser.js`)
+                const mysUser = await MysUser.create(stuid)
+                if (mysUser?.device) deviceId = mysUser.device
+                if (!deviceId && mysUser?.db) {
+                    deviceId = randomString(32).toUpperCase()
+                    mysUser.setCkData({ device: deviceId })
+                    await mysUser.save()
+                }
+            } catch (error) {
+                globalThis.logger?.debug?.(`[体力免验证码] 读取/保存账号设备 ID 失败：${error.message}`)
+            }
+        }
+
+        if (!deviceId) deviceId = randomString(32).toUpperCase()
+
+        // FP 优先读取小遥/Genshin 已缓存的账号级指纹，保持与 Device ID 的账号归属一致。
+        if (!deviceFp && stuid) {
+            try {
+                const redisClient = globalThis.redis
+                deviceFp = await redisClient?.get?.(`genshin:device_fp:${stuid}:fp`)
+                    || await redisClient?.get?.(`ZZZ:DEVICE_FP:${stuid}:FP`)
+                    || ''
+            } catch {}
+        }
+        deviceFp = deviceFp || DEFAULT_DEVICE_FP
+
+        const identity = { deviceId, deviceFp }
+        DEVICE_CACHE.set(cacheKey, identity)
+        return identity
     }
 
     getStoken(userId, uid) {
@@ -292,21 +374,23 @@ export class dailyNoteByWidget extends plugin {
         return `${t},${r},${DS}`
     }
 
-    getHeaders(isSr = false) {
-        return {
+    getHeaders(isSr = false, query = '', body = '') {
+        const identity = this.deviceInfo || {}
+        const headers = {
             'Cookie': this.e.cookie,
             "x-rpc-channel": "miyousheluodi",
-            'x-rpc-device_id': DEVICE_ID,
+            'x-rpc-device_id': identity.deviceId || randomString(32).toUpperCase(),
             'x-rpc-app_version': '2.40.1',
-            "x-rpc-device_model": "Mi 10",
+            "x-rpc-device_model": DEVICE_MODEL,
             'x-rpc-device_name': DEVICE_NAME,
             'x-rpc-client_type': '2',
-            "DS": isSr ? this.getDs2() : this.getDs(),
+            "DS": isSr ? this.getDs2(query, body) : this.getDs(),
             "Referer": "https://app.mihoyo.com",
             "x-rpc-sys_version": "12",
-            //"Host": "api-takumi-record.mihoyo.com",
             "User-Agent": "okhttp/4.8.0",
         }
+        if (identity.deviceFp) headers['x-rpc-device_fp'] = identity.deviceFp
+        return headers
     }
 }
 
