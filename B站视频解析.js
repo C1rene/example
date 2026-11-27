@@ -85,6 +85,7 @@ export class bilitv extends plugin {
     }
 
     async jxsp(e){
+        try {
         let bvid = ""
         if(e.msg.match(regAV)){
             let table = 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'
@@ -101,6 +102,7 @@ export class bilitv extends plugin {
             }
             bvid = r.join("")
             if(!(bvid.match(regBV))){
+                console.warn("AV号转换后未得到有效BV号:", e.msg, bvid)
                 return true
             }
         }
@@ -111,7 +113,7 @@ export class bilitv extends plugin {
             try {
                 const shortLinkMatch = regB23.exec(e.msg)
                 if (!shortLinkMatch) {
-                    e.reply("无法识别 B 站短链接")
+                    console.warn("无法识别 B 站短链接:", e.msg)
                     return true
                 }
                 const shortLinkPart = shortLinkMatch[0].replace(/\\/g, "")
@@ -122,7 +124,6 @@ export class bilitv extends plugin {
                 }
             } catch(err) {
                 console.error("B23短链接跳转失败:", err)
-                e.reply("B站短链接跳转失败，请稍后重试")
                 return true
             }
 
@@ -140,6 +141,10 @@ export class bilitv extends plugin {
         if(e.msg.match(regBV)){
             bvid = regBV.exec(e.msg)[0]
         }
+        if (!bvid) {
+            console.warn("无法识别 B 站视频链接:", e.msg)
+            return true
+        }
         let res = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`,{
             headers: {
                 'referer': 'https://www.bilibili.com/',
@@ -148,7 +153,7 @@ export class bilitv extends plugin {
         })
         res = await res.json()
         if(res.code != 0){
-            //return e.reply(bvid + "解析失败\n信息:" + res.message)
+            console.warn("B站视频信息解析失败:", res.message || res.code)
             return true
         }else{
             e.reply([segment.image(res.data.pic),`${res.data.title}\nhttps://www.bilibili.com/video/${bvid}\n作者: ${res.data.owner.name}\n播放: ${formatNumber(res.data.stat.view)} | 弹幕: ${formatNumber(res.data.stat.danmaku)}\n点赞: ${formatNumber(res.data.stat.like)} | 评论: ${formatNumber(res.data.stat.reply)}\n投币: ${formatNumber(res.data.stat.coin)} | 分享: ${formatNumber(res.data.stat.share)}\n收藏: ${formatNumber(res.data.stat.favorite)} | 时长: ${formatDurationDesc(res.data.duration)}\n\n简介: ${res.data.desc}`],true)
@@ -161,7 +166,7 @@ export class bilitv extends plugin {
         })
         res = await res.json()
         if(!res || res.code != 0){
-            //e.reply("视频解析失败")
+            console.warn("B站视频播放地址获取失败:", res?.message || res?.code)
             return true
         }
         e.reply(segment.video(Buffer.from(await (await fetch(res.data.durl[0].url,{
@@ -171,6 +176,10 @@ export class bilitv extends plugin {
             }
         })).arrayBuffer())))
         return true
+        } catch (err) {
+            console.error("B站视频解析失败:", err)
+            return true
+        }
     }
 
 
@@ -200,21 +209,20 @@ export class bilitv extends plugin {
                     )).json()
 
                     if (temp?.code !== 0 || !temp?.result?.media?.season_id) {
-                        e.reply("番剧解析失败：未获取到番剧信息")
+                        console.warn("B站番剧解析失败：未获取到番剧信息", temp)
                         return true
                     }
 
                     ssid = temp.result.media.season_id
                 } catch (err) {
                     console.error("B站番剧信息获取失败:", err)
-                    e.reply("番剧信息获取失败，请稍后重试")
                     return true
                 }
             } else {
                 const ssMatch = regSS.exec(e.msg)
 
                 if (!ssMatch) {
-                    e.reply("无法识别番剧链接")
+                    console.warn("无法识别番剧链接:", e.msg)
                     return true
                 }
 
@@ -233,7 +241,7 @@ export class bilitv extends plugin {
                 )).json()
 
                 if (temp?.code !== 0) {
-                    e.reply("番剧剧集信息获取失败")
+                    console.warn("B站番剧剧集信息获取失败:", temp?.message || temp?.code)
                     return true
                 }
 
@@ -241,14 +249,13 @@ export class bilitv extends plugin {
                 const episodeMatch = shareUrl?.match(/ep(\d+)/)
 
                 if (!episodeMatch) {
-                    e.reply("未找到该番剧的剧集信息")
+                    console.warn("未找到该番剧的剧集信息:", ssid)
                     return true
                 }
 
                 epid = episodeMatch[1]
             } catch (err) {
                 console.error("B站番剧剧集解析失败:", err)
-                e.reply("番剧剧集信息获取失败，请稍后重试")
                 return true
             }
         } else {
@@ -267,7 +274,7 @@ export class bilitv extends plugin {
             )).json()
 
             if (res?.code !== 0 || !res?.result) {
-                e.reply("番剧解析失败：" + displayValue(res?.message, "接口未返回有效数据"))
+                console.warn("B站番剧解析失败:", res?.message || "接口未返回有效数据", res)
                 return true
             }
 
@@ -311,7 +318,6 @@ export class bilitv extends plugin {
             return true
         } catch (err) {
             console.error("B站番剧解析失败:", err)
-            e.reply("番剧信息获取失败，请稍后重试")
             return true
         }
     }
